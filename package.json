@@ -4,6 +4,6 @@
   "description": "/usage command for pi showing Claude subscription usage limits",
   "type": "module",
   "keywords": ["pi-package"],
-  "license": "MIT",
+  "license": "MPL-2.0",
   "pi": { "extensions": ["./src/index.ts"] }
 }
