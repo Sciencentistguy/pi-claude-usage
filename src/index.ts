@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -66,19 +69,28 @@ async function fetchUsage(token: string, signal?: AbortSignal): Promise<UsageRes
 	return (await response.json()) as UsageResponse;
 }
 
+async function claudeCodeToken(): Promise<string> {
+	const configDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
+	let oauth: { accessToken?: string; expiresAt?: number } | undefined;
+	try {
+		oauth = JSON.parse(await readFile(join(configDir, ".credentials.json"), "utf8")).claudeAiOauth;
+	} catch {
+		throw new Error("Claude Code credentials not found; run `claude auth login`");
+	}
+	if (!oauth?.accessToken) throw new Error("Claude Code is not logged in with a subscription; run `claude auth login`");
+	if (oauth.expiresAt && oauth.expiresAt < Date.now()) {
+		throw new Error("Claude Code token has expired; run `claude` once to refresh it");
+	}
+	return oauth.accessToken;
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("usage", {
 		description: "Show Claude subscription usage limits",
 		handler: async (_args, ctx) => {
-			const token = await ctx.modelRegistry.getApiKeyForProvider("anthropic");
-			if (!token?.includes("sk-ant-oat")) {
-				ctx.ui.notify("Not signed in to Anthropic with a Claude subscription (use /login)", "error");
-				return;
-			}
-
 			let usage: UsageResponse;
 			try {
-				usage = await fetchUsage(token, ctx.signal);
+				usage = await fetchUsage(await claudeCodeToken(), ctx.signal);
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 				return;
