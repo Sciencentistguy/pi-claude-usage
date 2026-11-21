@@ -1,0 +1,9 @@
+{
+  "name": "pi-claude-usage",
+  "version": "0.1.0",
+  "description": "/usage command for pi showing Claude subscription usage limits",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "pi": { "extensions": ["./src/index.ts"] }
+}
