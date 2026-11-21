@@ -95,7 +95,7 @@ export default function (pi: ExtensionAPI) {
 				if (!lines.length) lines.push("No usage data returned.");
 				lines.push("", theme.fg("dim", "Press any key to dismiss"));
 				return {
-					render: (width: number) => lines.map((line) => `  ${line}`.slice(0, Math.max(width, 0) + 40)),
+					render: () => lines.map((line) => `  ${line}`),
 					invalidate: () => {},
 					handleInput: () => done(),
 				};
