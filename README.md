@@ -19,8 +19,7 @@ Run `/usage` inside pi. It renders a bar for each usage window:
 
 ## Authentication
 
-The extension uses the Claude Code OAuth token (`claudeAiOauth.accessToken`) from
-`$CLAUDE_CONFIG_DIR/.credentials.json`, defaulting to `~/.claude/.credentials.json`. Pi's own login is not used, so sign in with Claude Code first.
+The extension uses pi's stored Anthropic login; sign in with `/login` first.
 
 It calls `GET https://api.anthropic.com/api/oauth/usage` with the header `anthropic-beta: oauth-2025-04-20`.
 
