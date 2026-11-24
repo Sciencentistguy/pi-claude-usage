@@ -9,14 +9,21 @@ interface Window {
 	resets_at: string | null;
 }
 
-interface UsageResponse {
-	five_hour?: Window | null;
-	seven_day?: Window | null;
-	seven_day_opus?: Window | null;
-	seven_day_sonnet?: Window | null;
+interface ExtraUsage {
+	is_enabled: boolean;
+	monthly_limit: number | null;
+	used_credits: number | null;
+	utilization: number | null;
+	currency?: string | null;
 }
 
-const SECTIONS: [keyof UsageResponse, string][] = [
+type WindowKey = "five_hour" | "seven_day" | "seven_day_opus" | "seven_day_sonnet";
+
+type UsageResponse = Partial<Record<WindowKey, Window | null>> & {
+	extra_usage?: ExtraUsage | null;
+};
+
+const SECTIONS: [WindowKey, string][] = [
 	["five_hour", "Current session"],
 	["seven_day", "Current week (all models)"],
 	["seven_day_sonnet", "Current week (Sonnet only)"],
@@ -53,6 +60,35 @@ function renderSection(title: string, window: Window, bold: (s: string) => strin
 	];
 }
 
+function formatMinorUnits(amount: number, currency: string): string {
+	const format = new Intl.NumberFormat(undefined, { style: "currency", currency, currencyDisplay: "narrowSymbol" });
+	const { maximumFractionDigits = 2 } = format.resolvedOptions();
+	return format.format(amount / 10 ** maximumFractionDigits);
+}
+
+function startOfNextMonth(): string {
+	const now = new Date();
+	return new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
+}
+
+function renderExtraUsage(extra: ExtraUsage, bold: (s: string) => string, dim: (s: string) => string): string[] {
+	const title = "Usage credits";
+	if (!extra.is_enabled || extra.used_credits == null) return [];
+	const currency = extra.currency?.toUpperCase() ?? "USD";
+	const spent = formatMinorUnits(extra.used_credits, currency);
+	if (extra.monthly_limit == null) return [bold(title), `${spent} spent`];
+	const utilization =
+		extra.utilization ??
+		(extra.monthly_limit > 0 ? (extra.used_credits / extra.monthly_limit) * 100 : 100);
+	const [heading, barLine, reset] = renderSection(
+		title,
+		{ utilization, resets_at: startOfNextMonth() },
+		bold,
+		dim,
+	);
+	return [heading, `${barLine}  ${dim(`(${spent} / ${formatMinorUnits(extra.monthly_limit, currency)} spent)`)}`, reset];
+}
+
 async function fetchUsage(token: string, signal?: AbortSignal): Promise<UsageResponse> {
 	const response = await fetch(USAGE_URL, {
 		signal,
@@ -81,12 +117,19 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			await ctx.ui.custom<void>((_tui, theme, _kb, done) => {
+				const bold = (s: string) => theme.bold(s);
+				const dim = (s: string) => theme.fg("dim", s);
 				const lines: string[] = [];
 				for (const [key, title] of SECTIONS) {
 					const window = usage[key];
 					if (!window || window.utilization == null) continue;
 					if (lines.length) lines.push("");
-					lines.push(...renderSection(title, window, (s) => theme.bold(s), (s) => theme.fg("dim", s)));
+					lines.push(...renderSection(title, window, bold, dim));
+				}
+				const extra = usage.extra_usage ? renderExtraUsage(usage.extra_usage, bold, dim) : [];
+				if (extra.length) {
+					if (lines.length) lines.push("");
+					lines.push(...extra);
 				}
 				if (!lines.length) lines.push("No usage data returned.");
 				lines.push("", theme.fg("dim", "Press any key to dismiss"));

@@ -17,6 +17,8 @@ Run `/usage` inside pi. It renders a bar for each usage window:
 - `seven_day_sonnet`
 - `seven_day_opus`
 
+If usage credits (extra usage) are enabled, it also shows credit spend against the monthly limit, or total spend when there's no limit. On enterprise accounts this is the only form of usage.
+
 ## Authentication
 
 The extension uses pi's stored Anthropic login; sign in with `/login` first.
