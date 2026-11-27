@@ -6,4 +6,6 @@ Pi extension (`src/index.ts`) registering `/usage`, companion to earendil-works/
 monthly reset; the only usage form on enterprise accounts) when `is_enabled`.
 Install: `pi install /path/to/pi-claude-usage`.
 
-`/usage [claude|copilot]` also reports GitHub Copilot AI credits: `GET {api}/copilot_internal/user` with `Authorization: token <GitHub OAuth token>` (the `refresh` value of pi's `github-copilot` entry in `auth.json`, else `gh auth token`; not the short-lived Copilot token), rendering `quota_snapshots.premium_interactions` (`entitlement`, `credits_used`, `percent_remaining`, `unlimited`; `remaining` may be negative).
+`/usage [claude|copilot|deepseek]` also reports GitHub Copilot AI credits: `GET {api}/copilot_internal/user` with `Authorization: token <GitHub OAuth token>` (the `refresh` value of pi's `github-copilot` entry in `auth.json`, else `gh auth token`; not the short-lived Copilot token), rendering `quota_snapshots.premium_interactions` (`entitlement`, `credits_used`, `percent_remaining`, `unlimited`; `remaining` may be negative).
+
+`/usage deepseek` calls `GET https://api.deepseek.com/user/balance` (Bearer, key from `getApiKeyForProvider("deepseek")`) and prints `balance_infos[]` remaining balance per currency (no bar; no limit exists).

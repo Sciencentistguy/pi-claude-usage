@@ -198,15 +198,60 @@ function renderCopilot(usage: CopilotResponse, bold: Styler, dim: Styler): strin
 	return [heading, `${barLine}${detail}`, resetLine];
 }
 
+interface DeepSeekBalance {
+	currency: string;
+	total_balance: string;
+	granted_balance: string;
+	topped_up_balance: string;
+}
+
+interface DeepSeekResponse {
+	is_available?: boolean;
+	balance_infos?: DeepSeekBalance[];
+}
+
+async function fetchDeepSeekBalance(token: string, signal?: AbortSignal): Promise<DeepSeekResponse> {
+	const response = await fetch("https://api.deepseek.com/user/balance", {
+		signal,
+		headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+	});
+	if (!response.ok) throw new Error(`DeepSeek balance request failed: ${response.status} ${response.statusText}`);
+	return (await response.json()) as DeepSeekResponse;
+}
+
+function formatMoney(amount: string, currency: string): string {
+	const value = Number(amount);
+	if (!Number.isFinite(value)) return `${amount} ${currency}`;
+	try {
+		return new Intl.NumberFormat(undefined, { style: "currency", currency, currencyDisplay: "narrowSymbol" }).format(value);
+	} catch {
+		return `${amount} ${currency}`;
+	}
+}
+
+function renderDeepSeek(usage: DeepSeekResponse, bold: Styler, dim: Styler): string[] {
+	const lines: string[] = [];
+	for (const info of usage.balance_infos ?? []) {
+		const remaining = formatMoney(info.total_balance, info.currency);
+		const breakdown = dim(
+			`(${formatMoney(info.topped_up_balance, info.currency)} topped up, ${formatMoney(info.granted_balance, info.currency)} granted)`,
+		);
+		lines.push(`${remaining} remaining  ${breakdown}`);
+	}
+	if (!lines.length) return [];
+	const unavailable = usage.is_available === false ? [dim("Balance insufficient: API calls are unavailable")] : [];
+	return [bold("DeepSeek balance"), ...lines, ...unavailable];
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("usage", {
-		description: "Show Claude and GitHub Copilot usage limits",
+		description: "Show Claude, GitHub Copilot and DeepSeek usage",
 		getArgumentCompletions: (prefix) =>
-			["claude", "copilot"].filter((name) => name.startsWith(prefix)).map((name) => ({ value: name, label: name })),
+			["claude", "copilot", "deepseek"].filter((name) => name.startsWith(prefix)).map((name) => ({ value: name, label: name })),
 		handler: async (args, ctx) => {
 			const which = args.trim().toLowerCase();
-			if (which && which !== "claude" && which !== "copilot") {
-				ctx.ui.notify("Usage: /usage [claude|copilot]", "error");
+			if (which && which !== "claude" && which !== "copilot" && which !== "deepseek") {
+				ctx.ui.notify("Usage: /usage [claude|copilot|deepseek]", "error");
 				return;
 			}
 			const explicit = which !== "";
@@ -224,6 +269,7 @@ export default function (pi: ExtensionAPI) {
 
 			const wantClaude = which === "claude" || (!explicit && hasLogin("anthropic"));
 			const wantCopilot = which === "copilot" || (!explicit && hasLogin("github-copilot"));
+			const wantDeepSeek = which === "deepseek" || (!explicit && hasLogin("deepseek"));
 			await Promise.all([
 				wantClaude &&
 					collect("Claude", async () => {
@@ -237,8 +283,15 @@ export default function (pi: ExtensionAPI) {
 						const usage = await fetchCopilotUsage(ctx.signal);
 						return (bold, dim) => renderCopilot(usage, bold, dim);
 					}),
+				wantDeepSeek &&
+					collect("DeepSeek", async () => {
+						const token = await ctx.modelRegistry.getApiKeyForProvider("deepseek");
+						if (!token) throw new Error("No DeepSeek API key configured");
+						const usage = await fetchDeepSeekBalance(token, ctx.signal);
+						return (bold, dim) => renderDeepSeek(usage, bold, dim);
+					}),
 			]);
-			if (!wantClaude && !wantCopilot) errors.push("Not logged in to Anthropic or GitHub Copilot; run `/login`");
+			if (!wantClaude && !wantCopilot && !wantDeepSeek) errors.push("No Anthropic, GitHub Copilot or DeepSeek credentials configured");
 			if (!sections.length) {
 				ctx.ui.notify(errors.join("\n"), "error");
 				return;
