@@ -1,4 +1,10 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+const run = promisify(execFile);
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const BAR_WIDTH = 50;
@@ -102,34 +108,152 @@ async function fetchUsage(token: string, signal?: AbortSignal): Promise<UsageRes
 	return (await response.json()) as UsageResponse;
 }
 
+function renderClaude(usage: UsageResponse, bold: Styler, dim: Styler): string[] {
+	const lines: string[] = [];
+	for (const [key, title] of SECTIONS) {
+		const window = usage[key];
+		if (!window || window.utilization == null) continue;
+		if (lines.length) lines.push("");
+		lines.push(...renderSection(title, window, bold, dim));
+	}
+	const extra = usage.extra_usage ? renderExtraUsage(usage.extra_usage, bold, dim) : [];
+	if (extra.length) {
+		if (lines.length) lines.push("");
+		lines.push(...extra);
+	}
+	return lines;
+}
+
+interface QuotaSnapshot {
+	entitlement?: number | null;
+	remaining?: number | null;
+	percent_remaining?: number | null;
+	credits_used?: number | null;
+	unlimited?: boolean;
+	has_quota?: boolean;
+}
+
+interface CopilotResponse {
+	copilot_plan?: string;
+	quota_reset_date?: string | null;
+	quota_reset_date_utc?: string | null;
+	quota_snapshots?: { premium_interactions?: QuotaSnapshot | null };
+}
+
+type Styler = (s: string) => string;
+
+async function copilotCredentials(): Promise<{ token: string; apiBase: string }> {
+	let token: string | undefined;
+	let apiBase = "https://api.github.com";
+	try {
+		const auth = JSON.parse(await readFile(join(getAgentDir(), "auth.json"), "utf8"));
+		const credential = auth["github-copilot"];
+		if (credential?.type === "oauth" && typeof credential.refresh === "string") {
+			token = credential.refresh;
+			if (credential.enterpriseUrl) {
+				const domain = String(credential.enterpriseUrl).replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+				apiBase = `https://api.${domain}`;
+			}
+		}
+	} catch {}
+	token ??= (await run("gh", ["auth", "token"]).catch(() => undefined))?.stdout.trim();
+	if (!token) throw new Error("Not logged in to GitHub Copilot; run `/login`");
+	return { token, apiBase };
+}
+
+async function fetchCopilotUsage(signal?: AbortSignal): Promise<CopilotResponse> {
+	const { token, apiBase } = await copilotCredentials();
+	const response = await fetch(`${apiBase}/copilot_internal/user`, {
+		signal,
+		headers: { Authorization: `token ${token}`, Accept: "application/json" },
+	});
+	if (!response.ok) throw new Error(`Copilot usage request failed: ${response.status} ${response.statusText}`);
+	return (await response.json()) as CopilotResponse;
+}
+
+function formatCredits(amount: number): string {
+	return `${new Intl.NumberFormat().format(Math.round(amount))} AI credits`;
+}
+
+function renderCopilot(usage: CopilotResponse, bold: Styler, dim: Styler): string[] {
+	const title = usage.copilot_plan ? `GitHub Copilot AI credits (${usage.copilot_plan})` : "GitHub Copilot AI credits";
+	const quota = usage.quota_snapshots?.premium_interactions;
+	if (!quota) return [];
+	const entitlement = quota.entitlement ?? 0;
+	const used =
+		quota.credits_used ??
+		(quota.remaining != null && entitlement > 0 ? entitlement - quota.remaining : null);
+	if (quota.unlimited || entitlement <= 0) {
+		return used == null ? [] : [bold(title), `${formatCredits(used)} used ${dim("(pooled allowance)")}`];
+	}
+	const utilization =
+		quota.percent_remaining != null
+			? 100 - quota.percent_remaining
+			: used != null
+				? (used / entitlement) * 100
+				: 0;
+	const reset = usage.quota_reset_date_utc ?? usage.quota_reset_date ?? startOfNextMonth();
+	const [heading, barLine, resetLine] = renderSection(title, { utilization, resets_at: reset }, bold, dim);
+	const detail = used == null ? "" : `  ${dim(`(${formatCredits(used)} / ${formatCredits(entitlement)})`)}`;
+	return [heading, `${barLine}${detail}`, resetLine];
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("usage", {
-		description: "Show Claude subscription usage limits",
-		handler: async (_args, ctx) => {
-			let usage: UsageResponse;
-			try {
-				const token = await ctx.modelRegistry.getApiKeyForProvider("anthropic");
-				if (!token) throw new Error("Not logged in to Anthropic; run `/login`");
-				usage = await fetchUsage(token, ctx.signal);
-			} catch (error) {
-				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+		description: "Show Claude and GitHub Copilot usage limits",
+		getArgumentCompletions: (prefix) =>
+			["claude", "copilot"].filter((name) => name.startsWith(prefix)).map((name) => ({ value: name, label: name })),
+		handler: async (args, ctx) => {
+			const which = args.trim().toLowerCase();
+			if (which && which !== "claude" && which !== "copilot") {
+				ctx.ui.notify("Usage: /usage [claude|copilot]", "error");
 				return;
 			}
+			const explicit = which !== "";
+			const hasLogin = (provider: string) => ctx.modelRegistry.getProviderAuthStatus(provider).configured;
+
+			const sections: ((bold: Styler, dim: Styler) => string[])[] = [];
+			const errors: string[] = [];
+			const collect = async (name: string, fetcher: () => Promise<(bold: Styler, dim: Styler) => string[]>) => {
+				try {
+					sections.push(await fetcher());
+				} catch (error) {
+					errors.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			};
+
+			const wantClaude = which === "claude" || (!explicit && hasLogin("anthropic"));
+			const wantCopilot = which === "copilot" || (!explicit && hasLogin("github-copilot"));
+			await Promise.all([
+				wantClaude &&
+					collect("Claude", async () => {
+						const token = await ctx.modelRegistry.getApiKeyForProvider("anthropic");
+						if (!token) throw new Error("Not logged in to Anthropic; run `/login`");
+						const usage = await fetchUsage(token, ctx.signal);
+						return (bold, dim) => renderClaude(usage, bold, dim);
+					}),
+				wantCopilot &&
+					collect("Copilot", async () => {
+						const usage = await fetchCopilotUsage(ctx.signal);
+						return (bold, dim) => renderCopilot(usage, bold, dim);
+					}),
+			]);
+			if (!wantClaude && !wantCopilot) errors.push("Not logged in to Anthropic or GitHub Copilot; run `/login`");
+			if (!sections.length) {
+				ctx.ui.notify(errors.join("\n"), "error");
+				return;
+			}
+			if (errors.length) ctx.ui.notify(errors.join("\n"), "warning");
 
 			await ctx.ui.custom<void>((_tui, theme, _kb, done) => {
 				const bold = (s: string) => theme.bold(s);
 				const dim = (s: string) => theme.fg("dim", s);
 				const lines: string[] = [];
-				for (const [key, title] of SECTIONS) {
-					const window = usage[key];
-					if (!window || window.utilization == null) continue;
+				for (const section of sections) {
+					const rendered = section(bold, dim);
+					if (!rendered.length) continue;
 					if (lines.length) lines.push("");
-					lines.push(...renderSection(title, window, bold, dim));
-				}
-				const extra = usage.extra_usage ? renderExtraUsage(usage.extra_usage, bold, dim) : [];
-				if (extra.length) {
-					if (lines.length) lines.push("");
-					lines.push(...extra);
+					lines.push(...rendered);
 				}
 				if (!lines.length) lines.push("No usage data returned.");
 				lines.push("", theme.fg("dim", "Press any key to dismiss"));
