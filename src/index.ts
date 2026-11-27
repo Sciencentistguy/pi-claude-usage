@@ -173,8 +173,11 @@ async function fetchCopilotUsage(signal?: AbortSignal): Promise<CopilotResponse>
 	return (await response.json()) as CopilotResponse;
 }
 
+const formatAic = (amount: number) => new Intl.NumberFormat().format(Math.round(amount));
+const usd = (aic: number) => formatMinorUnits(Math.round(aic), "USD");
+
 function formatCredits(amount: number): string {
-	return `${new Intl.NumberFormat().format(Math.round(amount))} AI credits`;
+	return `${formatAic(amount)} AIC (${usd(amount)})`;
 }
 
 function renderCopilot(usage: CopilotResponse, bold: Styler, dim: Styler): string[] {
@@ -196,7 +199,10 @@ function renderCopilot(usage: CopilotResponse, bold: Styler, dim: Styler): strin
 				: 0;
 	const reset = usage.quota_reset_date_utc ?? usage.quota_reset_date ?? startOfNextMonth();
 	const [heading, barLine, resetLine] = renderSection(title, { utilization, resets_at: reset }, bold, dim);
-	const detail = used == null ? "" : `  ${dim(`(${formatCredits(used)} / ${formatCredits(entitlement)})`)}`;
+	const detail =
+		used == null
+			? ""
+			: `  ${dim(`(${formatAic(used)} / ${formatAic(entitlement)} AIC, ${usd(used)} / ${usd(entitlement)})`)}`;
 	return [heading, `${barLine}${detail}`, resetLine];
 }
 

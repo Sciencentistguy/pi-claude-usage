@@ -21,7 +21,7 @@ If usage credits (extra usage) are enabled, it also shows credit spend against t
 
 `/usage` shows every provider you're logged in to; use `/usage claude` or `/usage copilot` / `/usage deepseek` to pick one.
 
-For GitHub Copilot it renders AI credits used against the monthly allowance (1 credit = $0.01), or just credits used for pooled/unlimited org allowances.
+For GitHub Copilot it renders AI credits used against the monthly allowance (1 AIC = $0.01, shown in both AIC and USD), or just credits used for pooled/unlimited org allowances.
 
 For DeepSeek it shows the remaining balance (topped-up and granted) per currency.
 
