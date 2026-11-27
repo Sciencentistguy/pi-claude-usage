@@ -140,6 +140,8 @@ interface CopilotResponse {
 	quota_snapshots?: { premium_interactions?: QuotaSnapshot | null };
 }
 
+const PROVIDER_ORDER = ["Claude", "GitHub Copilot", "DeepSeek"];
+
 type Styler = (s: string) => string;
 
 async function copilotCredentials(): Promise<{ token: string; apiBase: string }> {
@@ -176,7 +178,7 @@ function formatCredits(amount: number): string {
 }
 
 function renderCopilot(usage: CopilotResponse, bold: Styler, dim: Styler): string[] {
-	const title = usage.copilot_plan ? `GitHub Copilot AI credits (${usage.copilot_plan})` : "GitHub Copilot AI credits";
+	const title = usage.copilot_plan ? `AI credits (${usage.copilot_plan})` : "AI credits";
 	const quota = usage.quota_snapshots?.premium_interactions;
 	if (!quota) return [];
 	const entitlement = quota.entitlement ?? 0;
@@ -240,7 +242,7 @@ function renderDeepSeek(usage: DeepSeekResponse, bold: Styler, dim: Styler): str
 	}
 	if (!lines.length) return [];
 	const unavailable = usage.is_available === false ? [dim("Balance insufficient: API calls are unavailable")] : [];
-	return [bold("DeepSeek balance"), ...lines, ...unavailable];
+	return [bold("Balance"), ...lines, ...unavailable];
 }
 
 export default function (pi: ExtensionAPI) {
@@ -257,11 +259,11 @@ export default function (pi: ExtensionAPI) {
 			const explicit = which !== "";
 			const hasLogin = (provider: string) => ctx.modelRegistry.getProviderAuthStatus(provider).configured;
 
-			const sections: ((bold: Styler, dim: Styler) => string[])[] = [];
+			const sections: { name: string; render: (bold: Styler, dim: Styler) => string[] }[] = [];
 			const errors: string[] = [];
 			const collect = async (name: string, fetcher: () => Promise<(bold: Styler, dim: Styler) => string[]>) => {
 				try {
-					sections.push(await fetcher());
+					sections.push({ name, render: await fetcher() });
 				} catch (error) {
 					errors.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
 				}
@@ -279,7 +281,7 @@ export default function (pi: ExtensionAPI) {
 						return (bold, dim) => renderClaude(usage, bold, dim);
 					}),
 				wantCopilot &&
-					collect("Copilot", async () => {
+					collect("GitHub Copilot", async () => {
 						const usage = await fetchCopilotUsage(ctx.signal);
 						return (bold, dim) => renderCopilot(usage, bold, dim);
 					}),
@@ -302,11 +304,12 @@ export default function (pi: ExtensionAPI) {
 				const bold = (s: string) => theme.bold(s);
 				const dim = (s: string) => theme.fg("dim", s);
 				const lines: string[] = [];
-				for (const section of sections) {
-					const rendered = section(bold, dim);
+				for (const { name, render } of sections.sort((a, b) => PROVIDER_ORDER.indexOf(a.name) - PROVIDER_ORDER.indexOf(b.name))) {
+					const rendered = render(bold, dim);
 					if (!rendered.length) continue;
-					if (lines.length) lines.push("");
-					lines.push(...rendered);
+					if (lines.length) lines.push("", "");
+					lines.push(bold(`━━ ${name} ━━`), "");
+					lines.push(...rendered.map((line) => (line ? `  ${line}` : line)));
 				}
 				if (!lines.length) lines.push("No usage data returned.");
 				lines.push("", theme.fg("dim", "Press any key to dismiss"));
